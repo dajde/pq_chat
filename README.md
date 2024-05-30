@@ -2,7 +2,7 @@
 
 ## Build the project
 
-Before building the project, you need have `rust`, `cargo` and `make` installed on your system. You can install them by following the instructions on the [Rust website](https://www.rust-lang.org/tools/install).
+Before building the project, you need to have `rust`, `cargo` and `make` installed on your system. You can install `rust` and `cargo` by following the instructions on the [Rust website](https://www.rust-lang.org/tools/install). `make` is usually available in the package manager of your system.
 
 In the root directory of the project, run the following command:
 
@@ -48,7 +48,7 @@ After initializing the keyserver, you can run it normally:
 $ ./keyserver
 ```
 
-To reinitialize the `keys.db` file, you can use the `--reset` option:
+To reinitialize the `keys.db` file (to delete registered users and published KEM bundles), you can use the `--reset` option:
 
 ```bash
 $ ./keyserver --reset
@@ -56,12 +56,12 @@ $ ./keyserver --reset
 
 ## Client
 
-To run the client, you need to copy the `ks_pub` file from the keyserver working directory to the client working directory.
+To run the client, you need to copy the `ks_pub` file from the keyserver working directory to the client working directory and name it `kskey`.
 
-After copying the `ks_pub` file, you can run the client:
+Then you can run the client:
 
 ```bash
 $ ./client
 ```
 
-The client will prompt you to enter the server and keyserver IP addresses and ports. Then it will ask you to enter your username.
+The client will prompt you to enter the key server and server IP addresses and ports. Then it will ask you to enter your username.

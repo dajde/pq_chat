@@ -1,0 +1,44 @@
+[package]
+name = "pqchat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sqlite = "0.36.0"
+serde = {version = "1.0.202", features = ["derive"]}
+serde_json = "1.0.117"
+aes-gcm = "0.10.3"
+oqs = { version = "0.9.0", features = ["vendored"] }
+base64 = "0.22.1"
+ratatui = "0.26.3"
+crossterm = "0.27.0"
+chrono = "0.4.38"
+log = "0.4.21"
+simplelog = "0.12.2"
+tokio = {version = "1.37.0", features = ["full"]}
+uuid = { version = "1.8.0", features = ["v4"] }
+socket2 = "0.5.7"
+
+[workspace]
+members = [ 
+   "client",
+   "keyserver",
+   "lib",
+   "server",
+]
+
+[[bin]]
+name = "server"
+path = "server/src/main.rs"
+
+[[bin]]
+name = "client"
+path = "client/src/main.rs"
+
+[[bin]]
+name = "keyserver"
+path = "keyserver/src/main.rs"
+
+[lib]
+name = "lib"
+path = "lib/src/lib.rs"

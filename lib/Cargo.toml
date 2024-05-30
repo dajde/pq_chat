@@ -1,0 +1,12 @@
+[package]
+name = "lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = {version = "1.0.202", features = ["derive"]}
+sqlite = "0.36.0"
+log = "0.4.21"
+serde_json = "1.0.117"
+oqs = { version = "0.9.0", features = ["vendored"] }
+tokio = {version = "1.37.0", features = ["full"]}

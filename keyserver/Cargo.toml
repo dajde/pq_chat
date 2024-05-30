@@ -1,0 +1,14 @@
+[package]
+name = "keyserver"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lib = { path = "../lib"}
+log = "0.4.21"
+simplelog = "0.12.2"
+sqlite = "0.36.0"
+oqs = { version = "0.9.0", features = ["vendored"] }
+base64 = "0.22.1"
+tokio = {version = "1.37.0", features = ["full"]}
+chrono = "0.4.38"

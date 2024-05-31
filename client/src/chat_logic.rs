@@ -780,7 +780,7 @@ pub async fn handle_message(
 
             for (secret_key, key_validity) in session_keys.iter() {
                 // Only try valid keys
-                if &message.sent_timestamp <= key_validity {
+                if message.sent_timestamp <= (key_validity + config.session_key_grace_period) {
                     let key = Key::<Aes256Gcm>::from_slice(secret_key);
                     let cipher = Aes256Gcm::new(&key);
 
@@ -825,6 +825,8 @@ pub async fn handle_message(
                     }
                 }
             }
+
+            error!("Failed to decrypt message. Dropping message");
             return Ok(());
         }
         Message::KemCipherText(message) => {
@@ -881,12 +883,13 @@ pub async fn handle_message(
                 }
             };
 
-            let (priv_kem, validity) = match get_privkem_by_uuid(message.uuid.as_slice()) {
-                Ok((priv_kem, timestamp)) => (priv_kem, timestamp),
-                Err(_) => {
-                    return log_and_err!("Failed to get PRIV_KEM. Message dropped");
-                }
-            };
+            let (priv_kem, validity, is_replaced) =
+                match get_privkem_by_uuid(message.uuid.as_slice()) {
+                    Ok((priv_kem, timestamp, is_replaced)) => (priv_kem, timestamp, is_replaced),
+                    Err(_) => {
+                        return log_and_err!("Failed to get PRIV_KEM. Message dropped");
+                    }
+                };
 
             if chrono::Utc::now().timestamp() >= validity + config.kem_grace_period {
                 return log_and_err!("PRIV_KEM expired. Message dropped");
@@ -913,9 +916,14 @@ pub async fn handle_message(
                 error!("Failed to store session key");
             }
 
-            match publish_kem_bundle(&message.to, &message.from, priv_dsa, &config).await {
-                Ok(_) => {}
-                Err(_) => return log_and_err!("Failed to publish KEM bundle"),
+            // Publish new KEM bundle if private KEM key is not replaced yet by the clean up routine
+            if !is_replaced {
+                match publish_kem_bundle(&message.to, &message.from, priv_dsa, config).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        return log_and_err!("Failed to publish KEM bundle. Message dropped");
+                    }
+                }
             }
 
             // Delete old private KEM key for forward secrecy
@@ -1019,30 +1027,37 @@ pub async fn clean_up(owner: &String, priv_dsa: &sig::SecretKey, config: &AppCon
         // Iterate over all session keys and delete expired ones
         let sessions_keys = get_all_session_keys().expect("Failed to get session keys");
         for (id, _, _, validity) in sessions_keys.iter() {
-            if current_time >= *validity + config.session_key_grace_period {
+            if current_time > (*validity + config.session_key_grace_period) {
                 delete_session_key(*id).expect("Failed to delete session key");
             }
         }
 
         // Iterate over all private KEM keys and delete expired ones.
-        // Publish new KEM bundle if private KEM key is expired
-        let priv_kem = get_all_privkem().expect("Failed to get privkem");
-        for (id, recipient, _, validity) in priv_kem.iter() {
-            if current_time >= *validity + config.kem_grace_period {
-                info!(
-                    "Deleting privkem with validity {}",
-                    *validity + config.kem_grace_period
-                );
-                delete_privkem(id).expect("Failed to delete privkem");
-
-                if let Err(_) = publish_kem_bundle(owner, recipient, priv_dsa, config).await {
-                    error!("Failed to publish KEM bundle");
+        let priv_kems = get_all_privkem().expect("Failed to get privkem");
+        for (id, recipient, _, validity, is_replaced) in priv_kems.iter() {
+            // Publish new KEM bundle if private KEM key is expired and not replaced yet
+            if (current_time > *validity) && !is_replaced {
+                match publish_kem_bundle(owner, recipient, priv_dsa, config).await {
+                    Ok(_) => {
+                        info!("Published new KEM bundle for {}", recipient);
+                        set_replaced_privkem(id).expect("Failed to set replaced flag for PRIV_KEM");
+                    }
+                    Err(e) => {
+                        error!("Failed to publish KEM bundle for {}. {}", recipient, e);
+                    }
                 }
+            }
+
+            // Delete old private KEM key for forward secrecy.
+            // This is done after the grace period, so delayed messages can still be decapsulated.
+            if current_time > (*validity + config.kem_grace_period) {
+                info!("Deleting privkem with validity {}", *validity);
+                delete_privkem(id).expect("Failed to delete privkem");
             }
         }
 
         info!("Expired key cleanup done");
-        // Run cleanup every hour
-        tokio::time::sleep(Duration::from_secs(3600)).await;
+        // Run cleanup every 10 minutes
+        tokio::time::sleep(Duration::from_secs(600)).await;
     }
 }

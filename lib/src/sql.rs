@@ -328,7 +328,8 @@ pub fn create_privkem_table() -> Result<()> {
             recipient TEXT NOT NULL,
             private_key BLOB NOT NULL,
             timestamp INTEGER NOT NULL,
-            uuid BLOB NOT NULL
+            uuid BLOB NOT NULL,
+            replaced INTEGER DEFAULT 0
         )",
     )?;
 
@@ -347,8 +348,8 @@ pub fn store_privkem(
 
     let mut statement = connection.prepare(
         "
-        INSERT INTO priv_kem (recipient, private_key, timestamp, uuid)
-        VALUES (?, ?, ?, ?);
+        INSERT INTO priv_kem (recipient, private_key, timestamp, uuid, replaced)
+        VALUES (?, ?, ?, ?, ?);
         ",
     )?;
 
@@ -356,6 +357,7 @@ pub fn store_privkem(
     statement.bind((2, private_key))?;
     statement.bind((3, validity))?;
     statement.bind((4, uuid))?;
+    statement.bind((5, 0))?;
 
     let result: State = statement.next()?;
 
@@ -372,15 +374,15 @@ pub fn store_privkem(
 
 /// Get private KEM key by recipient.
 ///
-/// Returns the private key and validity timestamp.
+/// Returns the private key, validity timestamp and replaced flag.
 ///
 /// If the private KEM key is not found, an error is returned.
-pub fn get_privkem_by_uuid(uuid: &[u8]) -> Result<(Vec<u8>, i64)> {
+pub fn get_privkem_by_uuid(uuid: &[u8]) -> Result<(Vec<u8>, i64, bool)> {
     let connection: Connection = Connection::open("store.db")?;
 
     let mut statement = connection.prepare(
         "
-        SELECT private_key, timestamp FROM priv_kem WHERE uuid = ?;
+        SELECT private_key, timestamp, replaced FROM priv_kem WHERE uuid = ?;
         ",
     )?;
 
@@ -392,8 +394,11 @@ pub fn get_privkem_by_uuid(uuid: &[u8]) -> Result<(Vec<u8>, i64)> {
         State::Row => {
             let private_key: Vec<u8> = statement.read(0)?;
             let validity: i64 = statement.read(1)?;
+            let replaced: i64 = statement.read(2)?;
+            let replaced: bool = if replaced == 1 { true } else { false };
+
             info!("sql: Private KEM key retrieved");
-            Ok((private_key, validity))
+            Ok((private_key, validity, replaced))
         }
         _ => {
             return log_and_err!("sql: Failed to retrieve private KEM key");
@@ -403,19 +408,19 @@ pub fn get_privkem_by_uuid(uuid: &[u8]) -> Result<(Vec<u8>, i64)> {
 
 /// Get all private KEM keys.
 ///
-/// Returns a vector of tuples containing the uuid, recipient, private key and validity timestamp.
+/// Returns a vector of tuples containing the uuid, recipient, private key, validity timestamp and replaced flag.
 ///
 /// Returns an empty vector if no private KEM keys are found.
-pub fn get_all_privkem() -> Result<Vec<(Vec<u8>, String, Vec<u8>, i64)>> {
+pub fn get_all_privkem() -> Result<Vec<(Vec<u8>, String, Vec<u8>, i64, bool)>> {
     let connection: Connection = Connection::open("store.db")?;
 
     let mut statement = connection.prepare(
         "
-        SELECT uuid, recipient, private_key, timestamp FROM priv_kem;
+        SELECT uuid, recipient, private_key, timestamp, replaced FROM priv_kem;
         ",
     )?;
 
-    let mut priv_kem_vec: Vec<(Vec<u8>, String, Vec<u8>, i64)> = Vec::new();
+    let mut priv_kem_vec: Vec<(Vec<u8>, String, Vec<u8>, i64, bool)> = Vec::new();
 
     loop {
         let result: State = statement.next()?;
@@ -426,7 +431,10 @@ pub fn get_all_privkem() -> Result<Vec<(Vec<u8>, String, Vec<u8>, i64)>> {
                 let recipient: String = statement.read(1)?;
                 let private_key: Vec<u8> = statement.read(2)?;
                 let timestamp: i64 = statement.read(3)?;
-                priv_kem_vec.push((uuid, recipient, private_key, timestamp));
+                let replaced: i64 = statement.read(4)?;
+                let replaced: bool = if replaced == 1 { true } else { false };
+
+                priv_kem_vec.push((uuid, recipient, private_key, timestamp, replaced));
             }
             State::Done => {
                 break;
@@ -436,6 +444,33 @@ pub fn get_all_privkem() -> Result<Vec<(Vec<u8>, String, Vec<u8>, i64)>> {
 
     info!("sql: Private KEM keys retrieved");
     Ok(priv_kem_vec)
+}
+
+/// Set replaced flag for private KEM key by uuid.
+///
+/// This is used to mark a private KEM key as replaced by a new key.
+pub fn set_replaced_privkem(uuid: &[u8]) -> Result<()> {
+    let connection: Connection = Connection::open("store.db")?;
+
+    let mut statement = connection.prepare(
+        "
+        UPDATE priv_kem SET replaced = 1 WHERE uuid = ?;
+        ",
+    )?;
+
+    statement.bind((1, uuid))?;
+
+    let result: State = statement.next()?;
+
+    match result {
+        State::Done => {
+            info!("sql: Private KEM key replaced");
+            Ok(())
+        }
+        _ => {
+            return log_and_err!("sql: Failed to replace private KEM key");
+        }
+    }
 }
 
 /// Delete private KEM key by uuid.

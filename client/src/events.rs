@@ -57,8 +57,8 @@ async fn handle_texting_event(
                 info!("Message sent");
                 Some(EventMessage::SendMessageSuccess)
             }
-            Err(_) => {
-                error!("Failed to send message");
+            Err(e) => {
+                error!("Failed to send message. Error: {}", e);
                 Some(EventMessage::SendMessageFailure)
             }
         },

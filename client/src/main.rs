@@ -76,7 +76,7 @@ async fn main() {
     let (tx, rx) = mpsc::channel::<TextMessage>();
 
     // Get stored messages
-    let (mut writer, mut reader) = get_stored_messages(&username, &tx, &config, &priv_dsa)
+    let (mut writer, mut reader) = join_server(&username, &tx, &config, &priv_dsa)
         .await
         .unwrap();
 

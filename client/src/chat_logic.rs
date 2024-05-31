@@ -166,6 +166,7 @@ pub async fn register_user(config: &AppConfig) -> Result<(String, sig::SecretKey
     stdin().read_line(&mut username)?;
     username = username.trim().to_string();
 
+    // Step 1 of the registration protocol - create long-term DSA keypair
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
     let (pk, sk) = dsa.keypair().expect("Failed to create keypair");
 
@@ -219,6 +220,8 @@ async fn keyserver_register(
 
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
 
+    // Step 2 of the registration protocol - sign the username and public DSA key.
+    // Then, send the signed message to the key server.
     let to_sign = joined_vec!(username.as_bytes(), pub_dsa);
     let sk = dsa
         .secret_key_from_bytes(priv_dsa)
@@ -236,6 +239,8 @@ async fn keyserver_register(
 
     lib::send_msg(&mut writer, &request).await?;
 
+    // Step 5 of the registration protocol - receive the response from the key server.
+    // Then, verify the key server's signature on Alice's data.
     let message: Message = receive_msg(&mut reader).await?;
 
     let register_response: RegisterResponse = match message {
@@ -408,7 +413,8 @@ async fn get_kem_bundle(
     }
 }
 
-/// Verify KEM bundle signature and timestamp
+/// Step 7 of the key establishment protocol - verify the KEM bundle.
+/// Verify the owner's signature on the KEM bundle and check the validity timestamp.
 async fn verify_kem_bundle(
     pub_kem: Vec<u8>,
     owner: &String,
@@ -541,7 +547,7 @@ pub async fn publish_kem_bundle(
 
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
 
-    // Short term KEM key pair. Step 1 of the protocol
+    // Step 1 of the key establishment protocol - create a new short term KEM keypair
     let kemalg = kem::Kem::new(kem::Algorithm::Kyber1024).expect("Failed to create KEM");
     let (pk, sk) = kemalg.keypair().expect("Failed to create KEM keypair");
 
@@ -552,7 +558,8 @@ pub async fn publish_kem_bundle(
     let id = Uuid::new_v4();
     let id = id.as_bytes();
 
-    // Sign the KEM bundle and send to key server. Step 2 of the protocol
+    // Step 2 of the key establishment protocol - send the signed KEM bundle to the key server
+    // KEM bundle consists of the public KEM key, the owner's username, the recipient's username, the validity timestamp and the UUID
     let to_sign = joined_vec!(
         pk.as_ref(),
         owner.as_bytes(),
@@ -646,11 +653,13 @@ pub async fn send_message(model: &Model, writer: &mut OwnedWriteHalf) -> Result<
 
     let (mut shared_key, key_validity) = get_latest_session_key(model.recipient.as_str())?;
 
+    // If the sender does not share a session key with the recipient or the session key is expired, create a new session key
     if shared_key.is_empty() || key_validity < current_time {
         info!(
             "No valid session key for {} found. Creating new session key",
             model.recipient
         );
+        // Step 4 of the key establishment protocol - get Bob's KEM bundle
         let (pk_kem, uuid) = match get_kem_bundle(
             &model.recipient,
             &model.username,
@@ -663,16 +672,18 @@ pub async fn send_message(model: &Model, writer: &mut OwnedWriteHalf) -> Result<
             Err(e) => return log_and_err!("Failed to obtain a KEM bundle. {}", e),
         };
 
+        // Step 8 of the key establishment protocol - encapsulate Bob's public KEM key
         let kem = kem::Kem::new(kem::Algorithm::Kyber1024).expect("Failed to create KEM");
         let (ct, ss) = kem
             .encapsulate(&pk_kem)
-            .expect("Failed to encapsulate KEM key");
+            .expect("Failed to encapsulate PUB_KEM");
         shared_key = ss.into_vec();
 
         let timestamp = current_time + model.config.session_key_lifetime;
 
         store_session_key(model.recipient.as_str(), shared_key.as_ref(), timestamp)?;
 
+        // Step 9 of the key establishment protocol - send the signed KEM ciphertext to Bob together with the UUID and the session key validity timestamp
         let to_sign = joined_vec!(
             ct.as_ref(),
             model.recipient.as_bytes(),
@@ -713,7 +724,7 @@ pub async fn send_message(model: &Model, writer: &mut OwnedWriteHalf) -> Result<
         aad: metadata.as_slice(),
     };
 
-    // Encrypt message with shared secret, until the shared secret is valid
+    // Encrypt message with the shared session key
     let key = Key::<Aes256Gcm>::from_slice(shared_key.as_ref());
     let cipher = Aes256Gcm::new(&key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -748,8 +759,8 @@ pub async fn message_receiver(
                 Ok(_) => {}
                 Err(e) => error!("Failed to handle message. {}", e),
             },
-            Err(_) => {
-                error!("Failed to receive message");
+            Err(e) => {
+                error!("Failed to receive message. {}", e);
                 return;
             }
         }
@@ -819,8 +830,8 @@ pub async fn handle_message(
                             info!("Message sent to TUI");
                             return Ok(());
                         }
-                        Err(_) => {
-                            return log_and_err!("Failed to send message to TUI");
+                        Err(e) => {
+                            return log_and_err!("Failed to send message to TUI. {}", e);
                         }
                     }
                 }
@@ -831,11 +842,16 @@ pub async fn handle_message(
         }
         Message::KemCipherText(message) => {
             info!("Received KEM_CT");
-            // Verify sender's signature
+            // Steps 10-13 of the key establishment protocol - verify the signatures, validity and decapsulate the KEM ciphertext.
+            // Store the session key and publish a new KEM bundle.
+            // Delete the old private KEM key.
             let pub_dsa_rec: sig::PublicKey = match get_pubdsa(&message.from, config).await {
                 Ok(pub_dsa) => pub_dsa,
-                Err(_) => {
-                    return log_and_err!("Failed to get PUB_DSA of CT_KEM sender. Message dropped");
+                Err(e) => {
+                    return log_and_err!(
+                        "Failed to get PUB_DSA of CT_KEM sender. Message dropped. {}",
+                        e
+                    );
                 }
             };
 
@@ -879,7 +895,7 @@ pub async fn handle_message(
             let ct = match kem.ciphertext_from_bytes(&message.ciphertext) {
                 Some(ct) => ct,
                 None => {
-                    return log_and_err!("Failed to parse KEM ciphertext. Message dropped");
+                    return log_and_err!("Failed to parse CT_KEM. Message dropped");
                 }
             };
 
@@ -905,7 +921,7 @@ pub async fn handle_message(
             let ss = match kem.decapsulate(&priv_kem, &ct) {
                 Ok(ss) => ss,
                 Err(_) => {
-                    return log_and_err!("Failed to decapsulate private KEM key. Message dropped");
+                    return log_and_err!("Failed to decapsulate PRIV_KEM. Message dropped");
                 }
             };
 
@@ -945,9 +961,9 @@ pub async fn handle_message(
     }
 }
 
-/// Get stored messages from the server.
+/// Join the server and receive stored messages
 /// Returns the writer and reader halves of the TcpStream
-pub async fn get_stored_messages(
+pub async fn join_server(
     username: &String,
     tx: &Sender<TextMessage>,
     config: &AppConfig,
@@ -968,15 +984,17 @@ pub async fn get_stored_messages(
         }
     };
 
+    // Set TCP keepalive, so the connection is not dropped
     let sock_ref = socket2::SockRef::from(&stream);
 
-    let mut ka = socket2::TcpKeepalive::new();
-    ka = ka.with_time(Duration::from_secs(20));
-    ka = ka.with_interval(Duration::from_secs(20));
+    let mut keep_alive = socket2::TcpKeepalive::new();
+    keep_alive = keep_alive.with_time(Duration::from_secs(20));
+    keep_alive = keep_alive.with_interval(Duration::from_secs(20));
 
-    sock_ref.set_tcp_keepalive(&ka)?;
+    sock_ref.set_tcp_keepalive(&keep_alive)?;
 
     let (mut reader, mut writer) = stream.into_split();
+
     // Send stored messages request
     let request = Message::ServerGreeting(ServerGreeting {
         username: username.clone(),

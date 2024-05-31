@@ -13,6 +13,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+/// Handle a request to get a public DSA key
 async fn get_pubdsa(
     mut stream: tokio::net::tcp::OwnedWriteHalf,
     message: PubDsaRequest,
@@ -38,14 +39,15 @@ async fn get_pubdsa(
     Ok(())
 }
 
+/// Handle a registration request of a new user
 async fn register_user(
     stream: &mut tokio::net::tcp::OwnedWriteHalf,
     message: RegisterRequest,
     thread_connection: Arc<Mutex<Connection>>,
     ks_priv: &SecretKey,
 ) -> std::result::Result<(), ServerError> {
+    // Step 3 of the registration protocol - verify Alice's signature and store her public key together with her identifier
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
-
     let to_verify = joined_vec!(message.username.as_bytes(), &message.pub_dsa);
 
     let pub_dsa = dsa
@@ -76,12 +78,14 @@ async fn register_user(
         .map_err(|_| ServerError::username_taken(&format!("Username already taken")))?;
     }
 
+    // Step 4 of the registration protocol - send key server's signature on Alice's data to Alice
     let response = Message::RegisterResponse(RegisterResponse { signature });
 
     send_msg(stream, &response).await?;
     Ok(())
 }
 
+/// Store a KEM bundle in the database
 async fn store_kem_bundle(
     message: KemBundle,
     thread_connection: Arc<Mutex<Connection>>,
@@ -94,8 +98,8 @@ async fn store_kem_bundle(
         (public_key, _) = lib::sql::get_pubdsa(&conn, &message.owner)?;
     }
 
+    // Step 3 of the key establishment protocol - verify Bob's signature on the KEM bundle and store it
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
-
     let to_verify = joined_vec!(
         &message.pub_kem,
         message.owner.as_bytes(),
@@ -136,6 +140,7 @@ async fn store_kem_bundle(
     Ok(())
 }
 
+/// Handle a request to get KEM bundles
 async fn get_kem_bundles(
     mut stream: tokio::net::tcp::OwnedWriteHalf,
     message: KemBundleRequest,
@@ -143,6 +148,7 @@ async fn get_kem_bundles(
 ) -> std::result::Result<(), ServerError> {
     let conn = thread_connection.lock().await;
 
+    // Step 5 of the key establishment protocol - verify Alice's signature on the request and the timestamp
     let (pub_dsa_recipient, _) = sql::get_pubdsa(&conn, &message.recipient)?;
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
     let to_verify = joined_vec!(
@@ -176,6 +182,7 @@ async fn get_kem_bundles(
 
     let kem_bundles = sql::get_kem_bundles(&conn, &message.owner, &message.recipient)?;
 
+    // Step 6 of the key establishment protocol - send KEM bundles to Alice (Bob's public key is requested by Alice in another request)
     let response = Message::KemBundles(kem_bundles);
 
     send_msg(&mut stream, &response).await?;

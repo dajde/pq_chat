@@ -78,8 +78,8 @@ pub fn read_userdata(mut file: File) -> Result<(String, sig::SecretKey)> {
     Ok((userdata.username, key))
 }
 
-/// Read the kskey file containing key server's base64 encoded public DSA key
-fn read_kskey(mut file: File) -> Result<sig::PublicKey> {
+/// Read the ks_pub file containing key server's base64 encoded public DSA key
+fn read_ks_pub(mut file: File) -> Result<sig::PublicKey> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
@@ -206,14 +206,14 @@ async fn keyserver_register(
 
     let (mut reader, mut writer) = key_server_stream.into_split();
 
-    let file = match File::open("kskey") {
+    let file = match File::open("ks_pub") {
         Ok(file) => file,
         Err(_) => exit_app!(
-            "Failed to open kskey (keyserver's public key) file. You have to create it first."
+            "Failed to open ks_pub (keyserver's public key) file. You have to create it first."
         ),
     };
 
-    let pub_dsa_keyserver = match read_kskey(file) {
+    let pub_dsa_keyserver = match read_ks_pub(file) {
         Ok(key) => key,
         Err(e) => exit_app!("Failed to read key server's public key. {}", e),
     };
@@ -261,7 +261,7 @@ async fn keyserver_register(
     match dsa.verify(&to_verify, &signature, &pub_dsa_keyserver) {
         Ok(_) => Ok(()),
         Err(_) => exit_app!(
-            "Failed to register user. Key server signature not verified. Check kskey file."
+            "Failed to register user. Key server signature not verified. Check ks_pub file."
         ),
     }
 }
@@ -500,7 +500,7 @@ async fn get_pubdsa(username: &String, config: &AppConfig) -> Result<sig::Public
     //Verify key server's signature
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
 
-    let pub_dsa_keyserver = read_kskey(File::open("kskey")?)?;
+    let pub_dsa_keyserver = read_ks_pub(File::open("ks_pub")?)?;
 
     let signature = dsa
         .signature_from_bytes(&message.signature)

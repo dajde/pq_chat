@@ -50,7 +50,7 @@ When running the keyserver for the first time, you need to initialize the keyser
 
 It will also create the files `ks_pub` and `ks_priv` in the working directory. These files contain the public and private keys of the keyserver.
 
-> **_IMPORTANT:_** You have to **copy** the `ks_pub` file to the client working directory and name it `kskey` before running the client.
+> **_IMPORTANT:_** You have to **copy** the `ks_pub` file to the client working directory before running the client.
 
 ```bash
 $ ./keyserver --init
@@ -70,7 +70,7 @@ $ ./keyserver --reset
 
 ### Client
 
-To run the client, you need to copy the `ks_pub` file from the keyserver working directory to the client working directory and name it `kskey`.
+To run the client, you need to copy the `ks_pub` file from the keyserver working directory to the client working directory.
 
 Then you can run the client:
 

@@ -129,10 +129,10 @@ pub fn read_or_create_config(file_path: &str) -> Result<AppConfig> {
         let default_config = AppConfig {
             keyserver_name: keyserver_name.trim().to_string(),
             server_name: server_name.trim().to_string(),
-            kem_lifetime: 3600,
-            session_key_lifetime: 60,
-            kem_grace_period: 60,
-            session_key_grace_period: 10,
+            kem_lifetime: 60 * 60 * 24 * 7,     // 1 week
+            session_key_lifetime: 60 * 60 * 24, // 1 day
+            kem_grace_period: 60 * 60 * 6,      // 6 hours
+            session_key_grace_period: 60 * 60,  // 1 hour
         };
 
         save_config(&default_config, file_path)?;

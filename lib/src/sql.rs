@@ -636,9 +636,9 @@ pub fn get_all_session_keys() -> Result<Vec<(i64, String, Vec<u8>, i64)>> {
         match result {
             State::Row => {
                 let id: i64 = statement.read(0)?;
-                let recipient: String = statement.read(0)?;
-                let session_key: Vec<u8> = statement.read(1)?;
-                let timestamp: i64 = statement.read(2)?;
+                let recipient: String = statement.read(1)?;
+                let session_key: Vec<u8> = statement.read(2)?;
+                let timestamp: i64 = statement.read(3)?;
                 session_keys.push((id, recipient, session_key, timestamp));
             }
             State::Done => {

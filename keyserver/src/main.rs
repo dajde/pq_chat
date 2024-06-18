@@ -85,57 +85,22 @@ async fn register_user(
     Ok(())
 }
 
-/// Store a KEM bundle in the database
+/// Store a KEM bundle in the database - step 3 of the key establishment protocol
 async fn store_kem_bundle(
     message: KemBundle,
     thread_connection: Arc<Mutex<Connection>>,
 ) -> Result<()> {
-    let public_key;
+    let conn = thread_connection.lock().await;
 
-    {
-        let conn = thread_connection.lock().await;
-
-        (public_key, _) = lib::sql::get_pubdsa(&conn, &message.owner)?;
-    }
-
-    // Step 3 of the key establishment protocol - verify Bob's signature on the KEM bundle and store it
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
-    let to_verify = joined_vec!(
+    sql::store_kem_bundle(
+        &conn,
+        &message.owner,
+        &message.recipient,
         &message.pub_kem,
-        message.owner.as_bytes(),
-        message.recipient.as_bytes(),
-        message.validity.to_be_bytes(),
-        &message.uuid
-    );
-
-    let pk = dsa
-        .public_key_from_bytes(&public_key)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Failed to parse public key"))?;
-
-    let signature = dsa
-        .signature_from_bytes(&message.signature)
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Failed to parse signature"))?;
-
-    dsa.verify(&to_verify, &signature, pk).map_err(|e| {
-        Error::new(
-            ErrorKind::InvalidData,
-            format!("Failed to verify signature. {}", e),
-        )
-    })?;
-
-    {
-        let conn = thread_connection.lock().await;
-
-        sql::store_kem_bundle(
-            &conn,
-            &message.owner,
-            &message.recipient,
-            &message.pub_kem,
-            &message.signature,
-            message.validity,
-            &message.uuid,
-        )?;
-    }
+        &message.signature,
+        message.validity,
+        &message.uuid,
+    )?;
 
     Ok(())
 }

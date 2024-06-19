@@ -35,46 +35,29 @@ pub fn init_userdata(username: String, key: &sig::SecretKey) -> Result<()> {
         priv_dsa: encoded_key,
     };
 
-    let json_string = match serde_json::to_string_pretty(&userdata) {
-        Ok(s) => s,
-        Err(_) => return log_and_err!("Failed to serialize userdata"),
-    };
-
-    let mut file = match File::create("userdata.json") {
-        Ok(file) => file,
-        Err(_) => return log_and_err!("Failed to create userdata file"),
-    };
-
-    match file.write_all(json_string.as_bytes()) {
-        Ok(_) => {}
-        Err(_) => return log_and_err!("Failed to write to userdata file"),
-    }
+    let json_string = serde_json::to_string_pretty(&userdata)?;
+    File::create("userdata.json")?.write_all(json_string.as_bytes())?;
 
     Ok(())
 }
 
 /// Read the userdata file containing the username and the user's base64 encoded private DSA key
 pub fn read_userdata(mut file: File) -> Result<(String, sig::SecretKey)> {
-    info!("Reading userdata file");
-
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
     let userdata: UserData = serde_json::from_str(&contents)?;
 
     let key_bytes =
-        match base64::engine::general_purpose::STANDARD.decode(userdata.priv_dsa.as_bytes()) {
-            Ok(key) => key,
-            Err(_) => return log_and_err!("Failed to decode private key"),
-        };
+        base64::engine::general_purpose::STANDARD.decode(userdata.priv_dsa.as_bytes())?;
 
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
-    let key = dsa
-        .secret_key_from_bytes(&key_bytes)
-        .expect("Failed to parse private key")
-        .to_owned();
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
-    info!("Userdata file read successfully");
+    let key = match dsa.secret_key_from_bytes(&key_bytes) {
+        Some(key) => key.to_owned(),
+        None => log_and_err!("Failed to parse private DSA key."),
+    };
+
     Ok((userdata.username, key))
 }
 
@@ -83,15 +66,12 @@ fn read_ks_pub(mut file: File) -> Result<sig::PublicKey> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
 
-    let key_bytes = match base64::engine::general_purpose::STANDARD.decode(contents) {
-        Ok(key) => key,
-        Err(_) => return log_and_err!("Failed to decode public key of key server"),
-    };
+    let key_bytes = base64::engine::general_purpose::STANDARD.decode(contents)?;
 
     let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
     let key = match dsa.public_key_from_bytes(&key_bytes) {
         Some(key) => key.to_owned(),
-        None => return log_and_err!("Failed to parse public key of key server"),
+        None => log_and_err!("Failed to parse key server's public key."),
     };
 
     Ok(key)
@@ -167,8 +147,8 @@ pub async fn register_user(config: &AppConfig) -> Result<(String, sig::SecretKey
     username = username.trim().to_string();
 
     // Step 1 of the registration protocol - create long-term DSA keypair
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
-    let (pk, sk) = dsa.keypair().expect("Failed to create keypair");
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
+    let (pk, sk) = dsa.keypair()?;
 
     // Register the user on the key server
     keyserver_register(
@@ -196,12 +176,8 @@ async fn keyserver_register(
     .await
     {
         Ok(Ok(stream)) => stream,
-        Ok(Err(e)) => {
-            exit_app!("Could not connect to the server. {e}. Exiting...");
-        }
-        Err(_) => {
-            exit_app!("Connection to the server timed out. Exiting...");
-        }
+        Ok(Err(e)) => exit_app!("Could not connect to the server. {e}. Exiting..."),
+        Err(_) => exit_app!("Connection to the server timed out. Exiting..."),
     };
 
     let (mut reader, mut writer) = key_server_stream.into_split();
@@ -218,14 +194,15 @@ async fn keyserver_register(
         Err(e) => exit_app!("Failed to read key server's public key. {}", e),
     };
 
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
     // Step 2 of the registration protocol - sign the username and public DSA key.
     // Then, send the signed message to the key server.
     let to_sign = joined_vec!(username.as_bytes(), pub_dsa);
-    let sk = dsa
-        .secret_key_from_bytes(priv_dsa)
-        .expect("Failed to parse secret key");
+    let sk = match dsa.secret_key_from_bytes(priv_dsa) {
+        Some(sk) => sk,
+        None => exit_app!("Failed to parse secret key"),
+    };
 
     let signature = dsa.sign(&to_sign, sk)?;
 
@@ -249,12 +226,13 @@ async fn keyserver_register(
             m
         }
         Message::ErrorResponse(e) => exit_app!("Failed to register user. {}", e.error.message),
-        _ => return log_and_err!("Unknown response"),
+        _ => exit_app!("Received wrong message kind"),
     };
 
-    let signature = dsa
-        .signature_from_bytes(&register_response.signature)
-        .expect("Failed to parse signature");
+    let signature = match dsa.signature_from_bytes(&register_response.signature) {
+        Some(signature) => signature,
+        None => exit_app!("Failed to parse signature"),
+    };
 
     let to_verify = joined_vec!(username.as_bytes(), pub_dsa);
 
@@ -273,7 +251,7 @@ async fn get_kem_bundle(
     config: &AppConfig,
     priv_dsa: &sig::SecretKey,
 ) -> Result<(kem::PublicKey, Vec<u8>)> {
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
     loop {
         // Try to get KEM bundle from local storage
@@ -297,7 +275,7 @@ async fn get_kem_bundle(
                 }
                 // If not OK, delete KEM bundle and try another one
                 Err(e) => {
-                    warn!("KEM bundle not verified. Trying another KEM bundle. {}", e);
+                    info!("KEM bundle not verified. Trying another KEM bundle. {}", e);
                     sql::delete_kem_bundle_user_by_uuid(&kem_bundle.uuid)?;
                     continue;
                 }
@@ -313,9 +291,7 @@ async fn get_kem_bundle(
                     current_time.to_be_bytes()
                 );
 
-                let signature = dsa
-                    .sign(&to_sign, priv_dsa)
-                    .expect("Failed to sign KEM bundle request");
+                let signature = dsa.sign(&to_sign, priv_dsa)?;
 
                 // Send KEM bundle request to the key server and receive response
                 let bundles_response: Message;
@@ -327,12 +303,8 @@ async fn get_kem_bundle(
                     .await
                     {
                         Ok(Ok(stream)) => stream,
-                        Ok(Err(e)) => {
-                            exit_app!("Could not connect to the server. {e}. Exiting...");
-                        }
-                        Err(_) => {
-                            exit_app!("Connection to the server timed out. Exiting...");
-                        }
+                        Ok(Err(e)) => exit_app!("Could not connect to the server. {e}. Exiting..."),
+                        Err(_) => exit_app!("Connection to the server timed out. Exiting..."),
                     };
 
                     let (mut reader, mut writer) = key_server_stream.into_split();
@@ -353,7 +325,7 @@ async fn get_kem_bundle(
 
                 let mut kem_bundles = match bundles_response {
                     Message::KemBundles(kem_bundles) => kem_bundles,
-                    _ => return log_and_err!("Received wrong message kind"),
+                    _ => log_and_err!("Received wrong message kind"),
                 };
 
                 // Verify one KEM bundle for returning, store the rest
@@ -361,14 +333,12 @@ async fn get_kem_bundle(
                 loop {
                     // If we did not receive anything, we have to wait for the other user to publish a new KEM bundle
                     if kem_bundles.data.is_empty() {
-                        return log_and_err!(
-                            "No KEM bundles available. The other user has to publish a new KEM bundle."
-                        );
+                        log_and_err!("No KEM bundles available. The other user has to publish a new KEM bundle.");
                     }
 
                     // Verify one KEM bundle for immediate use
-                    let kem_bundle: KemBundle =
-                        kem_bundles.data.pop().expect("Failed to get pKEM bundle");
+                    let kem_bundle: KemBundle = kem_bundles.data.pop().unwrap();
+
                     match verify_kem_bundle(
                         kem_bundle.pub_kem.clone(),
                         &kem_bundle.owner,
@@ -424,11 +394,12 @@ async fn verify_kem_bundle(
     signature: &Vec<u8>,
     config: &AppConfig,
 ) -> Result<kem::PublicKey> {
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
-    let signature = dsa
-        .signature_from_bytes(signature)
-        .expect("Failed to parse signature");
+    let signature = match dsa.signature_from_bytes(signature) {
+        Some(signature) => signature,
+        None => log_and_err!("Failed to parse signature"),
+    };
 
     let to_verify = joined_vec!(
         &pub_kem,
@@ -443,20 +414,21 @@ async fn verify_kem_bundle(
     // Verify owner's signature on KEM bundle
     match dsa.verify(&to_verify, &signature, &pub_dsa) {
         Ok(_) => info!("Owner's signature on KEM bundle verified"),
-        Err(_) => return log_and_err!("Owner's signature on KEM bundle not verified"),
+        Err(_) => log_and_err!("Owner's signature on KEM bundle not verified"),
     }
 
     // Verify KEM bundle validity
     let current_time = chrono::Utc::now().timestamp();
     if validity < current_time {
-        return log_and_err!("KEM bundle expired");
+        log_and_err!("KEM bundle expired");
     }
 
-    let kem = kem::Kem::new(kem::Algorithm::Kyber1024).expect("Failed to create KEM");
+    let kem = kem::Kem::new(kem::Algorithm::Kyber1024)?;
 
-    let pk_kem = kem
-        .public_key_from_bytes(pub_kem.as_slice())
-        .expect("Failed to parse public key");
+    let pk_kem = match kem.public_key_from_bytes(pub_kem.as_slice()) {
+        Some(pk_kem) => pk_kem,
+        None => log_and_err!("Failed to parse public KEM key"),
+    };
 
     Ok(pk_kem.to_owned())
 }
@@ -470,12 +442,8 @@ async fn get_pubdsa(username: &String, config: &AppConfig) -> Result<sig::Public
     .await
     {
         Ok(Ok(stream)) => stream,
-        Ok(Err(e)) => {
-            exit_app!("Could not connect to the server. {e}. Exiting...");
-        }
-        Err(_) => {
-            exit_app!("Connection to the server timed out. Exiting...");
-        }
+        Ok(Err(e)) => exit_app!("Could not connect to the server. {e}. Exiting..."),
+        Err(_) => exit_app!("Connection to the server timed out. Exiting..."),
     };
 
     let (mut tcpreader, mut tcpwriter) = stream.into_split();
@@ -486,37 +454,36 @@ async fn get_pubdsa(username: &String, config: &AppConfig) -> Result<sig::Public
 
     let request = Message::PubDsaRequest(request);
 
-    lib::send_msg(&mut tcpwriter, &request)
-        .await
-        .expect("Failed to send public key request");
+    lib::send_msg(&mut tcpwriter, &request).await?;
 
     let message: Message = receive_msg(&mut tcpreader).await?;
 
     let message = match message {
         Message::PubDsa(pub_dsa) => pub_dsa,
-        _ => return log_and_err!("Received wrong message kind"),
+        _ => log_and_err!("Received wrong message kind"),
     };
 
     //Verify key server's signature
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
     let pub_dsa_keyserver = read_ks_pub(File::open("ks_pub")?)?;
 
-    let signature = dsa
-        .signature_from_bytes(&message.signature)
-        .expect("Failed to parse signature");
+    let signature = match dsa.signature_from_bytes(&message.signature) {
+        Some(signature) => signature,
+        None => log_and_err!("Failed to parse signature"),
+    };
+
     let to_verify = joined_vec!(message.username.as_bytes(), &message.pub_dsa);
 
     match dsa.verify(&to_verify, &signature, &pub_dsa_keyserver) {
         Ok(_) => info!("Key server's PUB_DSA signature verified"),
-        Err(_) => {
-            return log_and_err!("Key server's PUB_DSA signature not verified. Message dropped.");
-        }
+        Err(_) => log_and_err!("Key server's PUB_DSA signature not verified. Message dropped."),
     }
 
-    let pk = dsa
-        .public_key_from_bytes(&message.pub_dsa as &[u8])
-        .expect("Failed to parse public key");
+    let pk = match dsa.public_key_from_bytes(&message.pub_dsa as &[u8]) {
+        Some(pk) => pk,
+        None => log_and_err!("Failed to parse public DSA key"),
+    };
 
     Ok(pk.to_owned())
 }
@@ -535,21 +502,17 @@ pub async fn publish_kem_bundle(
     .await
     {
         Ok(Ok(stream)) => stream,
-        Ok(Err(e)) => {
-            exit_app!("Could not connect to the server. {e}. Exiting...");
-        }
-        Err(_) => {
-            exit_app!("Connection to the server timed out. Exiting...");
-        }
+        Ok(Err(e)) => exit_app!("Could not connect to the server. {e}. Exiting..."),
+        Err(_) => exit_app!("Connection to the server timed out. Exiting..."),
     };
 
     let (_reader, mut writer) = key_server_stream.into_split();
 
-    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
+    let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
     // Step 1 of the key establishment protocol - create a new short term KEM keypair
-    let kemalg = kem::Kem::new(kem::Algorithm::Kyber1024).expect("Failed to create KEM");
-    let (pk, sk) = kemalg.keypair().expect("Failed to create KEM keypair");
+    let kemalg = kem::Kem::new(kem::Algorithm::Kyber1024)?;
+    let (pk, sk) = kemalg.keypair()?;
 
     // Generate timestamp for KEM bundle validity
     let validity = chrono::Utc::now().timestamp() + config.kem_lifetime;
@@ -568,9 +531,7 @@ pub async fn publish_kem_bundle(
         id
     );
 
-    let signature = dsa
-        .sign(&to_sign, priv_dsa)
-        .expect("Failed to sign KEM bundle");
+    let signature = dsa.sign(&to_sign, priv_dsa)?;
 
     store_privkem(&recipient, sk.as_ref(), validity, id)?;
 
@@ -590,7 +551,7 @@ pub async fn publish_kem_bundle(
 }
 
 /// Send a contact request to the recipient
-pub async fn send_contact_request(model: &Model, writer: &mut OwnedWriteHalf) {
+pub async fn send_contact_request(model: &Model, writer: &mut OwnedWriteHalf) -> Result<()> {
     // Publish 10 KEM bundles for the new contact
     for _ in 0..10 {
         publish_kem_bundle(
@@ -599,8 +560,7 @@ pub async fn send_contact_request(model: &Model, writer: &mut OwnedWriteHalf) {
             &model.priv_dsa,
             &model.config,
         )
-        .await
-        .expect("Failed to publish KEM bundle");
+        .await?;
     }
 
     // Send contact request to the recipient
@@ -611,40 +571,42 @@ pub async fn send_contact_request(model: &Model, writer: &mut OwnedWriteHalf) {
 
     let message = Message::ContactRequest(contact_request);
 
-    lib::send_msg(writer, &message)
-        .await
-        .expect("Failed to send contact request");
+    lib::send_msg(writer, &message).await?;
 
-    store_contact(model.input.as_str()).expect("Failed to store contact");
+    store_contact(model.input.as_str())?;
+
+    Ok(())
 }
 
 /// Accept a contact request and publish KEM bundles to the key server
-pub async fn accept_contact_request(model: &Model) {
+pub async fn accept_contact_request(model: &Model) -> Result<()> {
     if model.list_selected >= model.contact_requests.len() {
-        return;
+        return Ok(());
     }
 
     let contact = model.contact_requests[model.list_selected].clone();
 
     // Publish 10 KEM bundles for the new contact
     for _ in 0..10 {
-        publish_kem_bundle(&model.username, &contact, &model.priv_dsa, &model.config)
-            .await
-            .expect("Failed to publish KEM bundle");
+        publish_kem_bundle(&model.username, &contact, &model.priv_dsa, &model.config).await?;
     }
 
-    store_contact(contact.as_str()).expect("Failed to store contact");
-    remove_contact_request(contact.as_str()).expect("Failed to remove contact request");
+    store_contact(contact.as_str())?;
+    remove_contact_request(contact.as_str())?;
+
+    Ok(())
 }
 
 /// Decline a contact request
-pub fn decline_contact_request(model: &Model) {
+pub fn decline_contact_request(model: &Model) -> Result<()> {
     if model.list_selected >= model.contact_requests.len() {
-        return;
+        return Ok(());
     }
 
     let contact = model.contact_requests[model.list_selected].clone();
-    remove_contact_request(contact.as_str()).expect("Failed to remove contact request");
+    remove_contact_request(contact.as_str())?;
+
+    Ok(())
 }
 
 /// Send encrypted message to the recipient
@@ -669,14 +631,12 @@ pub async fn send_message(model: &Model, writer: &mut OwnedWriteHalf) -> Result<
         .await
         {
             Ok(pk) => pk,
-            Err(e) => return log_and_err!("Failed to obtain a KEM bundle. {}", e),
+            Err(e) => log_and_err!("Failed to obtain a KEM bundle. {}", e),
         };
 
         // Step 8 of the key establishment protocol - encapsulate Bob's public KEM key
-        let kem = kem::Kem::new(kem::Algorithm::Kyber1024).expect("Failed to create KEM");
-        let (ct, ss) = kem
-            .encapsulate(&pk_kem)
-            .expect("Failed to encapsulate PUB_KEM");
+        let kem = kem::Kem::new(kem::Algorithm::Kyber1024)?;
+        let (ct, ss) = kem.encapsulate(&pk_kem)?;
         shared_key = ss.into_vec();
 
         let timestamp = current_time + model.config.session_key_lifetime;
@@ -692,10 +652,8 @@ pub async fn send_message(model: &Model, writer: &mut OwnedWriteHalf) -> Result<
             &uuid
         );
 
-        let dsa = sig::Sig::new(sig::Algorithm::Dilithium5).expect("Failed to create DSA");
-        let signature = dsa
-            .sign(&to_sign, &model.priv_dsa)
-            .expect("Failed to sign message");
+        let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
+        let signature = dsa.sign(&to_sign, &model.priv_dsa)?;
         let signature = signature.into_vec();
 
         let ct_msg = KemCipherText {
@@ -728,9 +686,11 @@ pub async fn send_message(model: &Model, writer: &mut OwnedWriteHalf) -> Result<
     let key = Key::<Aes256Gcm>::from_slice(shared_key.as_ref());
     let cipher = Aes256Gcm::new(&key);
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, payload)
-        .expect("Failed to encrypt message");
+
+    let ciphertext = match cipher.encrypt(&nonce, payload) {
+        Ok(ciphertext) => ciphertext,
+        Err(e) => log_and_err!("Failed to encrypt message. {}", e),
+    };
 
     let message = TextMessage {
         from: model.username.clone(),
@@ -755,10 +715,11 @@ pub async fn message_receiver(
 ) {
     loop {
         match receive_msg(reader).await {
-            Ok(m) => match handle_message(m, &tx, config, priv_dsa).await {
-                Ok(_) => {}
-                Err(e) => error!("Failed to handle message. {}", e),
-            },
+            Ok(m) => {
+                if let Err(e) = handle_message(m, &tx, config, priv_dsa).await {
+                    error!("Failed to handle message. {}", e);
+                }
+            }
             Err(e) => {
                 error!("Failed to receive message. {}", e);
                 return;
@@ -783,9 +744,7 @@ pub async fn handle_message(
             // Try to decrypt message with each of the saved session keys
             let session_keys = match get_all_session_keys_by_recipient(&message.from) {
                 Ok(keys) => keys,
-                Err(_) => {
-                    return log_and_err!("Failed to get session keys. Dropping message");
-                }
+                Err(e) => log_and_err!("Failed to get session keys. Dropping message. Error: {e}"),
             };
             let nonce = Nonce::from_slice(&message.nonce);
 
@@ -810,8 +769,8 @@ pub async fn handle_message(
                     // Try to decrypt message
                     let plaintext = match cipher.decrypt(nonce, payload) {
                         Ok(plaintext) => plaintext,
-                        Err(_) => {
-                            error!("Failed to decrypt message. Trying another session key or dropping message");
+                        Err(e) => {
+                            error!("Failed to decrypt message. Trying another session key or dropping message. Error: {e}");
                             continue;
                         }
                     };
@@ -825,15 +784,8 @@ pub async fn handle_message(
                         nonce: message.nonce,
                     };
 
-                    match tx.send(message) {
-                        Ok(_) => {
-                            info!("Message sent to TUI");
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            return log_and_err!("Failed to send message to TUI. {}", e);
-                        }
-                    }
+                    tx.send(message)?;
+                    return Ok(());
                 }
             }
 
@@ -848,25 +800,15 @@ pub async fn handle_message(
             let pub_dsa_rec: sig::PublicKey = match get_pubdsa(&message.from, config).await {
                 Ok(pub_dsa) => pub_dsa,
                 Err(e) => {
-                    return log_and_err!(
-                        "Failed to get PUB_DSA of CT_KEM sender. Message dropped. {}",
-                        e
-                    );
+                    log_and_err!("Failed to get PUB_DSA of CT_KEM sender. Message dropped. {e}")
                 }
             };
 
-            let dsa = match sig::Sig::new(sig::Algorithm::Dilithium5) {
-                Ok(dsa) => dsa,
-                Err(_) => {
-                    return log_and_err!("Failed to create DSA. Message dropped");
-                }
-            };
+            let dsa = sig::Sig::new(sig::Algorithm::Dilithium5)?;
 
             let signature = match dsa.signature_from_bytes(&message.signature) {
                 Some(signature) => signature,
-                None => {
-                    return log_and_err!("Failed to parse signature. Message dropped");
-                }
+                None => log_and_err!("Failed to parse signature. Message dropped"),
             };
 
             let to_verify: Vec<u8> = joined_vec!(
@@ -880,80 +822,51 @@ pub async fn handle_message(
             match dsa.verify(&to_verify, &signature, &pub_dsa_rec) {
                 Ok(_) => info!("Sender's CT_KEM signature verified"),
                 Err(_) => {
-                    return log_and_err!("Sender's CT_KEM signature not verified. Message dropped");
+                    log_and_err!("Sender's CT_KEM signature not verified. Message dropped");
                 }
             }
 
             // Decapsulate KEM ciphertext
-            let kem = match kem::Kem::new(kem::Algorithm::Kyber1024) {
-                Ok(kem) => kem,
-                Err(_) => {
-                    return log_and_err!("Failed to create KEM. Message dropped");
-                }
-            };
+            let kem = kem::Kem::new(kem::Algorithm::Kyber1024)?;
 
             let ct = match kem.ciphertext_from_bytes(&message.ciphertext) {
                 Some(ct) => ct,
                 None => {
-                    return log_and_err!("Failed to parse CT_KEM. Message dropped");
+                    log_and_err!("Failed to parse CT_KEM. Message dropped");
                 }
             };
 
-            let (priv_kem, validity, is_replaced) =
-                match get_privkem_by_uuid(message.uuid.as_slice()) {
-                    Ok((priv_kem, timestamp, is_replaced)) => (priv_kem, timestamp, is_replaced),
-                    Err(_) => {
-                        return log_and_err!("Failed to get PRIV_KEM. Message dropped");
-                    }
-                };
+            let (priv_kem, validity, is_replaced) = get_privkem_by_uuid(message.uuid.as_slice())?;
 
             if chrono::Utc::now().timestamp() >= validity + config.kem_grace_period {
-                return log_and_err!("PRIV_KEM expired. Message dropped");
+                log_and_err!("PRIV_KEM expired. Message dropped");
             }
 
             let priv_kem = match kem.secret_key_from_bytes(&priv_kem) {
                 Some(priv_kem) => priv_kem,
                 None => {
-                    return log_and_err!("Failed to parse PRIV_KEM. Message dropped");
+                    log_and_err!("Failed to parse PRIV_KEM. Message dropped");
                 }
             };
 
-            let ss = match kem.decapsulate(&priv_kem, &ct) {
-                Ok(ss) => ss,
-                Err(_) => {
-                    return log_and_err!("Failed to decapsulate PRIV_KEM. Message dropped");
-                }
-            };
+            let ss = kem.decapsulate(&priv_kem, &ct)?;
 
             let key = Key::<Aes256Gcm>::from_slice(ss.as_ref());
 
             // Store session key for later use and publish new KEM bundle
-            if let Err(_) = store_session_key(&message.from, key.as_ref(), message.sk_validity) {
-                error!("Failed to store session key");
-            }
+            store_session_key(&message.from, key.as_ref(), message.sk_validity)?;
 
             // Publish new KEM bundle if private KEM key is not replaced yet by the clean up routine
             if !is_replaced {
-                match publish_kem_bundle(&message.to, &message.from, priv_dsa, config).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        return log_and_err!("Failed to publish KEM bundle. Message dropped");
-                    }
-                }
+                publish_kem_bundle(&message.to, &message.from, priv_dsa, config).await?;
             }
 
             // Delete old private KEM key for forward secrecy
-            match delete_privkem(&message.uuid) {
-                Ok(_) => {}
-                Err(_) => return log_and_err!("Failed to delete PRIV_KEM"),
-            }
+            delete_privkem(&message.uuid)?;
 
             return Ok(());
         }
-        Message::ContactRequest(message) => match store_contact_request(&message.from) {
-            Ok(_) => Ok(()),
-            Err(_) => return log_and_err!("Failed to store contact request"),
-        },
+        Message::ContactRequest(message) => store_contact_request(&message.from),
         _ => {
             warn!("Received unknown message kind");
             Ok(())
@@ -1000,19 +913,15 @@ pub async fn join_server(
         username: username.clone(),
     });
 
-    lib::send_msg(&mut writer, &request)
-        .await
-        .expect("Failed to send server greeting request");
+    lib::send_msg(&mut writer, &request).await?;
 
     // Receive stored messages
-    let response = receive_msg(&mut reader)
-        .await
-        .expect("Failed to receive stored messages");
+    let response = receive_msg(&mut reader).await?;
 
     let messages = match response {
         Message::StoredMessagesResponse(messages) => messages,
         _ => {
-            return log_and_err!("Received wrong message kind");
+            log_and_err!("Received wrong message kind");
         }
     };
 
@@ -1040,28 +949,32 @@ pub async fn join_server(
 pub async fn clean_up(owner: &String, priv_dsa: &sig::SecretKey, config: &AppConfig) {
     loop {
         let current_time = chrono::Utc::now().timestamp();
-        info!("Starting clean up. Current time {}", current_time);
+        info!("cleanup: Starting clean up. Current time {}", current_time);
 
         // Iterate over all session keys and delete expired ones
-        let sessions_keys = get_all_session_keys().expect("Failed to get session keys");
+        let sessions_keys = get_all_session_keys().expect("cleanup: Failed to get session keys");
         for (id, _, _, validity) in sessions_keys.iter() {
             if current_time > (*validity + config.session_key_grace_period) {
-                delete_session_key(*id).expect("Failed to delete session key");
+                delete_session_key(*id).expect("cleanup: Failed to delete session key");
             }
         }
 
         // Iterate over all private KEM keys and delete expired ones.
-        let priv_kems = get_all_privkem().expect("Failed to get privkem");
+        let priv_kems = get_all_privkem().expect("cleanup: Failed to get privkem");
         for (id, recipient, _, validity, is_replaced) in priv_kems.iter() {
             // Publish new KEM bundle if private KEM key is expired and not replaced yet
             if (current_time > *validity) && !is_replaced {
                 match publish_kem_bundle(owner, recipient, priv_dsa, config).await {
                     Ok(_) => {
-                        info!("Published new KEM bundle for {}", recipient);
-                        set_replaced_privkem(id).expect("Failed to set replaced flag for PRIV_KEM");
+                        info!("cleanup: Published new KEM bundle for {}", recipient);
+                        set_replaced_privkem(id)
+                            .expect("cleanup: Failed to set replaced flag for PRIV_KEM");
                     }
                     Err(e) => {
-                        error!("Failed to publish KEM bundle for {}. {}", recipient, e);
+                        error!(
+                            "cleanup: Failed to publish KEM bundle for {}. {}",
+                            recipient, e
+                        );
                     }
                 }
             }
@@ -1069,12 +982,12 @@ pub async fn clean_up(owner: &String, priv_dsa: &sig::SecretKey, config: &AppCon
             // Delete old private KEM key for forward secrecy.
             // This is done after the grace period, so delayed messages can still be decapsulated.
             if current_time > (*validity + config.kem_grace_period) {
-                info!("Deleting privkem with validity {}", *validity);
-                delete_privkem(id).expect("Failed to delete privkem");
+                info!("cleanup: Deleting privkem with validity {}", *validity);
+                delete_privkem(id).expect("cleanup: Failed to delete privkem");
             }
         }
 
-        info!("Expired key cleanup done");
+        info!("cleanup: Expired key cleanup done");
         // Run cleanup every 10 minutes
         tokio::time::sleep(Duration::from_secs(600)).await;
     }

@@ -29,7 +29,7 @@ macro_rules! log_and_err {
     ($msg:expr $(, $arg:expr)*) => {{
         let formatted_msg = format!($msg $(, $arg)*);
         error!("{}", formatted_msg);
-        Err(Box::new(Error::new(ErrorKind::InvalidData, formatted_msg)))
+        return Err(Box::new(Error::new(ErrorKind::InvalidData, formatted_msg)))
     }};
 }
 
@@ -40,16 +40,14 @@ pub async fn send_msg(
 ) -> Result<()> {
     let serialized_message: String = match serde_json::to_string(&message) {
         Ok(s) => s,
-        Err(_) => return log_and_err!("Failed to serialize message"),
+        Err(_) => log_and_err!("Failed to serialize message"),
     };
 
     let prefixed_message: Vec<u8> = get_msg_with_len_prefix(&serialized_message);
 
     match stream.write_all(&prefixed_message).await {
         Ok(_) => {}
-        Err(e) => {
-            return log_and_err!("Failed to send message: {}", e);
-        }
+        Err(e) => log_and_err!("Failed to send message: {e}"),
     }
 
     stream.flush().await?;
@@ -76,30 +74,24 @@ pub async fn receive_msg(stream: &mut tokio::net::tcp::OwnedReadHalf) -> Result<
     const MAX_MESSAGE_LENGTH: u32 = 10 * 1024 * 1024; // 10 MB
 
     if message_length > MAX_MESSAGE_LENGTH {
-        return log_and_err!("Message too long: {}", message_length);
+        log_and_err!("Message too long: {message_length}");
     }
 
     let mut buf: Vec<u8> = vec![0; message_length as usize];
 
     match stream.read_exact(&mut buf).await {
         Ok(_) => (),
-        Err(e) => {
-            return log_and_err!("Failed to read message from stream. {}", e);
-        }
+        Err(e) => log_and_err!("Failed to read message from stream. {e}"),
     }
 
     let content: String = match String::from_utf8(buf.clone()) {
         Ok(s) => s,
-        Err(e) => {
-            return log_and_err!("Failed to convert message to string. {}", e);
-        }
+        Err(e) => log_and_err!("Failed to convert message to string. {e}"),
     };
 
     let message: Message = match serde_json::from_str(&content) {
         Ok(m) => m,
-        Err(e) => {
-            return log_and_err!("Failed to deserialize message. {}", e);
-        }
+        Err(e) => log_and_err!("Failed to deserialize message. {e}"),
     };
 
     Ok(message)

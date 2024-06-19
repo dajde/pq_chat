@@ -77,8 +77,13 @@ async fn handle_contact_management_event(
                 Some(EventMessage::InputCharacter(c))
             } else {
                 if c == 'x' {
-                    decline_contact_request(&model);
-                    Some(EventMessage::DeclineContactRequest)
+                    match decline_contact_request(&model) {
+                        Ok(_) => Some(EventMessage::DeclineContactRequest),
+                        Err(e) => {
+                            error!("Failed to decline contact request. Error: {}", e);
+                            None
+                        }
+                    }
                 } else {
                     None
                 }
@@ -91,11 +96,21 @@ async fn handle_contact_management_event(
                     return None;
                 }
 
-                send_contact_request(&model, writer).await;
-                Some(EventMessage::SendContactRequest)
+                match send_contact_request(&model, writer).await {
+                    Ok(_) => Some(EventMessage::SendContactRequest),
+                    Err(e) => {
+                        error!("Failed to send contact request. Error: {}", e);
+                        None
+                    }
+                }
             } else if model.focus == Focus::List {
-                accept_contact_request(&model).await;
-                Some(EventMessage::AcceptContactRequest)
+                match accept_contact_request(&model).await {
+                    Ok(_) => Some(EventMessage::AcceptContactRequest),
+                    Err(e) => {
+                        error!("Failed to accept contact request. Error: {}", e);
+                        None
+                    }
+                }
             } else {
                 None
             }

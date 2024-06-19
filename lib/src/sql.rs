@@ -64,9 +64,7 @@ pub fn store_kem_bundle_user(
             info!("sql: KEM bundle stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store KEM bundle");
-        }
+        _ => log_and_err!("sql: Failed to store KEM bundle"),
     }
 }
 
@@ -106,9 +104,7 @@ pub fn get_single_kem_bundle_by_owner(owner: &str) -> Result<KemBundle> {
                 uuid,
             })
         }
-        _ => {
-            return log_and_err!("sql: Failed to retrieve KEM bundle");
-        }
+        _ => log_and_err!("sql: Failed to retrieve KEM bundle"),
     }
 }
 
@@ -131,9 +127,7 @@ pub fn delete_kem_bundle_user_by_uuid(uuid: &[u8]) -> Result<()> {
             info!("sql: KEM bundle removed");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to remove KEM bundle");
-        }
+        _ => log_and_err!("sql: Failed to remove KEM bundle"),
     }
 }
 
@@ -174,9 +168,7 @@ pub fn store_contact(username: &str) -> Result<()> {
             info!("sql: Contact stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store contact");
-        }
+        _ => log_and_err!("sql: Failed to store contact"),
     }
 }
 
@@ -251,9 +243,7 @@ pub fn store_contact_request(from: &str) -> Result<()> {
             info!("sql: Contact request stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store contact request");
-        }
+        _ => log_and_err!("sql: Failed to store contact request"),
     }
 }
 
@@ -310,9 +300,7 @@ pub fn remove_contact_request(from: &str) -> Result<()> {
             info!("sql: Contact request removed");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to remove contact request");
-        }
+        _ => log_and_err!("sql: Failed to remove contact request"),
     }
 }
 
@@ -366,9 +354,7 @@ pub fn store_privkem(
             info!("sql: Private KEM key stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store private KEM key");
-        }
+        _ => log_and_err!("sql: Failed to store private KEM key"),
     }
 }
 
@@ -400,9 +386,7 @@ pub fn get_privkem_by_uuid(uuid: &[u8]) -> Result<(Vec<u8>, i64, bool)> {
             info!("sql: Private KEM key retrieved");
             Ok((private_key, validity, replaced))
         }
-        _ => {
-            return log_and_err!("sql: Failed to retrieve private KEM key");
-        }
+        _ => log_and_err!("sql: Failed to retrieve private KEM key"),
     }
 }
 
@@ -467,9 +451,7 @@ pub fn set_replaced_privkem(uuid: &[u8]) -> Result<()> {
             info!("sql: Private KEM key replaced");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to replace private KEM key");
-        }
+        _ => log_and_err!("sql: Failed to replace private KEM key"),
     }
 }
 
@@ -492,9 +474,7 @@ pub fn delete_privkem(uuid: &[u8]) -> Result<()> {
             info!("sql: Private KEM key removed");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to remove private KEM key");
-        }
+        _ => log_and_err!("sql: Failed to remove private KEM key"),
     }
 }
 
@@ -539,9 +519,7 @@ pub fn store_session_key(recipient: &str, session_key: &[u8], timestamp: i64) ->
             info!("sql: Session key stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store session key");
-        }
+        _ => log_and_err!("sql: Failed to store session key"),
     }
 }
 
@@ -670,9 +648,7 @@ pub fn delete_session_key(id: i64) -> Result<()> {
             info!("sql: Session key removed");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to remove session key");
-        }
+        _ => log_and_err!("sql: Failed to remove session key"),
     }
 }
 
@@ -719,9 +695,7 @@ pub fn store_pubdsa(
             info!("sql: Public DSA key stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store public DSA key");
-        }
+        _ => log_and_err!("sql: Failed to store public DSA key"),
     }
 }
 
@@ -752,9 +726,7 @@ pub fn get_pubdsa(
             info!("sql: Public DSA key retrieved");
             Ok((public_key, signature))
         }
-        _ => {
-            return log_and_err!("sql: Failed to retrieve public DSA key");
-        }
+        _ => log_and_err!("sql: Failed to retrieve public DSA key"),
     }
 }
 
@@ -817,9 +789,7 @@ impl Storable for Message {
             Message::TextMessage(message) => message.store(connection),
             Message::KemCipherText(message) => message.store(connection),
             Message::ContactRequest(message) => message.store(connection),
-            _ => {
-                return log_and_err!("sql: Unsupported message type");
-            }
+            _ => log_and_err!("sql: Unsupported message type"),
         }
     }
 }
@@ -850,9 +820,7 @@ impl Storable for TextMessage {
                 info!("sql: Text message stored");
                 Ok(())
             }
-            _ => {
-                return log_and_err!("sql: Failed to store text message");
-            }
+            _ => log_and_err!("sql: Failed to store text message"),
         }
     }
 }
@@ -880,9 +848,7 @@ impl Storable for KemCipherText {
                 info!("sql: KEM cipher text stored");
                 Ok(())
             }
-            _ => {
-                return log_and_err!("sql: Failed to store KEM cipher text");
-            }
+            _ => log_and_err!("sql: Failed to store KEM cipher text"),
         }
     }
 }
@@ -906,9 +872,7 @@ impl Storable for ContactRequest {
                 info!("sql: Contact request stored");
                 Ok(())
             }
-            _ => {
-                return log_and_err!("sql: Failed to store contact request");
-            }
+            _ => log_and_err!("sql: Failed to store contact request"),
         }
     }
 }
@@ -1240,9 +1204,7 @@ pub fn store_kem_bundle(
             info!("sql: KEM bundle stored");
             Ok(())
         }
-        _ => {
-            return log_and_err!("sql: Failed to store KEM bundle");
-        }
+        _ => log_and_err!("sql: Failed to store KEM bundle"),
     }
 }
 

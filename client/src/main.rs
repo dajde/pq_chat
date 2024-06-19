@@ -46,8 +46,8 @@ async fn main() {
     let (username, priv_dsa) = match File::open("userdata.json") {
         Ok(file) => match read_userdata(file) {
             Ok((username, key)) => (username, key),
-            Err(_) => {
-                error!("Failed to read userdata");
+            Err(e) => {
+                error!("Failed to read userdata. {e}");
                 panic!();
             }
         },
